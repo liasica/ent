@@ -882,6 +882,9 @@ func (a *Atlas) aColumns(et *Table, at *schema.Table) error {
 			a.sqlDialect.atIncrementC(at, c2)
 		}
 		at.AddColumns(c2)
+		if c1.Comment != "" {
+			c2.AddAttrs(&schema.Comment{Text: c1.Comment})
+		}
 	}
 	return nil
 }
