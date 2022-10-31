@@ -372,6 +372,11 @@ func (pq *PetQuery) Select(fields ...string) *PetSelect {
 	return selbuild
 }
 
+// Aggregate returns a PetSelect configured with the given aggregations.
+func (pq *PetQuery) Aggregate(fns ...AggregateFunc) *PetSelect {
+	return pq.Select().Aggregate(fns...)
+}
+
 func (pq *PetQuery) prepareQuery(ctx context.Context) error {
 	for _, f := range pq.fields {
 		if !pet.ValidColumn(f) {
@@ -475,7 +480,7 @@ func (pq *PetQuery) loadFriends(ctx context.Context, query *PetQuery, nodes []*P
 			outValue := int(values[0].(*sql.NullInt64).Int64)
 			inValue := int(values[1].(*sql.NullInt64).Int64)
 			if nids[inValue] == nil {
-				nids[inValue] = map[*Pet]struct{}{byID[outValue]: struct{}{}}
+				nids[inValue] = map[*Pet]struct{}{byID[outValue]: {}}
 				return assign(columns[1:], values[1:])
 			}
 			nids[inValue][byID[outValue]] = struct{}{}
@@ -678,8 +683,6 @@ func (pgb *PetGroupBy) sqlQuery() *sql.Selector {
 	for _, fn := range pgb.fns {
 		aggregation = append(aggregation, fn(selector))
 	}
-	// If no columns were selected in a custom aggregation function, the default
-	// selection is the fields used for "group-by", and the aggregation functions.
 	if len(selector.SelectedColumns()) == 0 {
 		columns := make([]string, 0, len(pgb.fields)+len(pgb.fns))
 		for _, f := range pgb.fields {
@@ -699,6 +702,12 @@ type PetSelect struct {
 	sql *sql.Selector
 }
 
+// Aggregate adds the given aggregation functions to the selector query.
+func (ps *PetSelect) Aggregate(fns ...AggregateFunc) *PetSelect {
+	ps.fns = append(ps.fns, fns...)
+	return ps
+}
+
 // Scan applies the selector query and scans the result into the given value.
 func (ps *PetSelect) Scan(ctx context.Context, v any) error {
 	if err := ps.prepareQuery(ctx); err != nil {
@@ -709,6 +718,16 @@ func (ps *PetSelect) Scan(ctx context.Context, v any) error {
 }
 
 func (ps *PetSelect) sqlScan(ctx context.Context, v any) error {
+	aggregation := make([]string, 0, len(ps.fns))
+	for _, fn := range ps.fns {
+		aggregation = append(aggregation, fn(ps.sql))
+	}
+	switch n := len(*ps.selector.flds); {
+	case n == 0 && len(aggregation) > 0:
+		ps.sql.Select(aggregation...)
+	case n != 0 && len(aggregation) > 0:
+		ps.sql.AppendSelect(aggregation...)
+	}
 	rows := &sql.Rows{}
 	query, args := ps.sql.Query()
 	if err := ps.driver.Query(ctx, query, args, rows); err != nil {

@@ -406,6 +406,11 @@ func (uq *UserQuery) Select(fields ...string) *UserSelect {
 	return selbuild
 }
 
+// Aggregate returns a UserSelect configured with the given aggregations.
+func (uq *UserQuery) Aggregate(fns ...AggregateFunc) *UserSelect {
+	return uq.Select().Aggregate(fns...)
+}
+
 func (uq *UserQuery) prepareQuery(ctx context.Context) error {
 	for _, f := range uq.fields {
 		if !user.ValidColumn(f) {
@@ -546,7 +551,7 @@ func (uq *UserQuery) loadFollowers(ctx context.Context, query *UserQuery, nodes 
 			outValue := uint64(values[0].(*sql.NullInt64).Int64)
 			inValue := uint64(values[1].(*sql.NullInt64).Int64)
 			if nids[inValue] == nil {
-				nids[inValue] = map[*User]struct{}{byID[outValue]: struct{}{}}
+				nids[inValue] = map[*User]struct{}{byID[outValue]: {}}
 				return assign(columns[1:], values[1:])
 			}
 			nids[inValue][byID[outValue]] = struct{}{}
@@ -604,7 +609,7 @@ func (uq *UserQuery) loadFollowing(ctx context.Context, query *UserQuery, nodes 
 			outValue := uint64(values[0].(*sql.NullInt64).Int64)
 			inValue := uint64(values[1].(*sql.NullInt64).Int64)
 			if nids[inValue] == nil {
-				nids[inValue] = map[*User]struct{}{byID[outValue]: struct{}{}}
+				nids[inValue] = map[*User]struct{}{byID[outValue]: {}}
 				return assign(columns[1:], values[1:])
 			}
 			nids[inValue][byID[outValue]] = struct{}{}
@@ -778,8 +783,6 @@ func (ugb *UserGroupBy) sqlQuery() *sql.Selector {
 	for _, fn := range ugb.fns {
 		aggregation = append(aggregation, fn(selector))
 	}
-	// If no columns were selected in a custom aggregation function, the default
-	// selection is the fields used for "group-by", and the aggregation functions.
 	if len(selector.SelectedColumns()) == 0 {
 		columns := make([]string, 0, len(ugb.fields)+len(ugb.fns))
 		for _, f := range ugb.fields {
@@ -799,6 +802,12 @@ type UserSelect struct {
 	sql *sql.Selector
 }
 
+// Aggregate adds the given aggregation functions to the selector query.
+func (us *UserSelect) Aggregate(fns ...AggregateFunc) *UserSelect {
+	us.fns = append(us.fns, fns...)
+	return us
+}
+
 // Scan applies the selector query and scans the result into the given value.
 func (us *UserSelect) Scan(ctx context.Context, v any) error {
 	if err := us.prepareQuery(ctx); err != nil {
@@ -809,6 +818,16 @@ func (us *UserSelect) Scan(ctx context.Context, v any) error {
 }
 
 func (us *UserSelect) sqlScan(ctx context.Context, v any) error {
+	aggregation := make([]string, 0, len(us.fns))
+	for _, fn := range us.fns {
+		aggregation = append(aggregation, fn(us.sql))
+	}
+	switch n := len(*us.selector.flds); {
+	case n == 0 && len(aggregation) > 0:
+		us.sql.Select(aggregation...)
+	case n != 0 && len(aggregation) > 0:
+		us.sql.AppendSelect(aggregation...)
+	}
 	rows := &sql.Rows{}
 	query, args := us.sql.Query()
 	if err := us.driver.Query(ctx, query, args, rows); err != nil {

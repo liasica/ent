@@ -45,15 +45,17 @@ func TestMySQL(t *testing.T) {
 
 			URL(t, client)
 			Dirs(t, client)
-			Ints(t, client)
 			Floats(t, client)
-			Strings(t, client)
 			NetAddr(t, client)
 			RawMessage(t, client)
-			// Skip predicates test for MySQL old versions.
+			// Skip tests with JSON functions for old MySQL versions.
 			if version != "56" {
+				URLs(t, client)
+				Ints(t, client)
+				Strings(t, client)
 				Predicates(t, client)
 			}
+			Scan(t, client)
 		})
 	}
 }
@@ -85,6 +87,7 @@ func TestMaria(t *testing.T) {
 			NetAddr(t, client)
 			RawMessage(t, client)
 			Predicates(t, client)
+			Scan(t, client)
 		})
 	}
 }
@@ -108,6 +111,7 @@ func TestPostgres(t *testing.T) {
 			require.NoError(t, err)
 
 			URL(t, client)
+			URLs(t, client)
 			Dirs(t, client)
 			Ints(t, client)
 			Floats(t, client)
@@ -115,6 +119,7 @@ func TestPostgres(t *testing.T) {
 			NetAddr(t, client)
 			RawMessage(t, client)
 			Predicates(t, client)
+			Scan(t, client)
 		})
 	}
 }
@@ -127,6 +132,7 @@ func TestSQLite(t *testing.T) {
 	require.NoError(t, client.Schema.Create(ctx, migrate.WithGlobalUniqueID(true)))
 
 	URL(t, client)
+	URLs(t, client)
 	Dirs(t, client)
 	Ints(t, client)
 	Floats(t, client)
@@ -134,6 +140,7 @@ func TestSQLite(t *testing.T) {
 	NetAddr(t, client)
 	RawMessage(t, client)
 	Predicates(t, client)
+	Scan(t, client)
 }
 
 func Ints(t *testing.T, client *ent.Client) {
@@ -153,6 +160,8 @@ func Ints(t *testing.T, client *ent.Client) {
 	require.Equal(t, []int{1, 2, 3}, usr.Ints)
 	usr = client.User.GetX(ctx, usr.ID)
 	require.Equal(t, []int{1, 2, 3}, usr.Ints)
+	usr = usr.Update().AppendInts([]int{4, 5, 6}).SaveX(ctx)
+	require.Equal(t, []int{1, 2, 3, 4, 5, 6}, usr.Ints)
 }
 
 func Floats(t *testing.T, client *ent.Client) {
@@ -183,6 +192,73 @@ func Strings(t *testing.T, client *ent.Client) {
 	require.Empty(t, usr.Strings)
 	require.Empty(t, client.User.GetX(ctx, usr.ID).Strings)
 	require.Zero(t, client.User.Query().Where(user.StringsNotNil()).CountX(ctx))
+
+	t.Run("Modifier API", func(t *testing.T) {
+		// Append to an empty array.
+		usr.Update().SetStrings([]string{}).SetT(&schema.T{Ls: []string{}}).ExecX(ctx)
+		usr = usr.Update().Modify(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, user.FieldStrings, []string{"foo"})
+			sqljson.Append(u, user.FieldT, []string{"foo"}, sqljson.Path("ls"))
+		}).SaveX(ctx)
+		require.Equal(t, []string{"foo"}, usr.Strings)
+		require.Equal(t, []string{"foo"}, usr.T.Ls)
+
+		// Set a 'null' (or an undefined) value.
+		usr.Update().ClearStrings().ClearT().ExecX(ctx)
+		usr.Update().SetStrings(nil).SetT(&schema.T{Ls: nil}).ExecX(ctx)
+		usr = client.User.GetX(ctx, usr.ID)
+		usr = usr.Update().Modify(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, user.FieldStrings, []string{"foo"})
+			sqljson.Append(u, user.FieldT, []string{"foo"}, sqljson.Path("ls"))
+		}).SaveX(ctx)
+		require.Equal(t, []string{"foo"}, usr.Strings)
+		require.Equal(t, []string{"foo"}, usr.T.Ls)
+		usr = usr.Update().Modify(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, user.FieldStrings, []string{"bar", "baz"})
+			sqljson.Append(u, user.FieldT, []string{"bar", "baz"}, sqljson.Path("ls"))
+		}).SaveX(ctx)
+		require.Equal(t, []string{"foo", "bar", "baz"}, usr.Strings)
+		require.Equal(t, []string{"foo", "bar", "baz"}, usr.T.Ls)
+
+		// Set a NULL (or an undefined) value.
+		usr.Update().ClearStrings().ExecX(ctx)
+		usr = usr.Update().Modify(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, user.FieldStrings, []string{"foo"})
+		}).SaveX(ctx)
+		require.Equal(t, []string{"foo"}, usr.Strings)
+	})
+
+	t.Run("Fluent API", func(t *testing.T) {
+		// Append to an empty array.
+		usr.Update().SetStrings([]string{}).SetInts([]int{}).ExecX(ctx)
+		usr = usr.Update().AppendStrings([]string{"foo"}).AppendInts([]int{1}).SaveX(ctx)
+		require.Equal(t, []int{1}, usr.Ints)
+		require.Equal(t, []string{"foo"}, usr.Strings)
+		usr = client.User.GetX(ctx, usr.ID)
+		require.Equal(t, []int{1}, usr.Ints)
+		require.Equal(t, []string{"foo"}, usr.Strings)
+		usr = usr.Update().AppendStrings([]string{"bar", "baz"}).AppendInts([]int{2, 3}).SaveX(ctx)
+		require.Equal(t, []int{1, 2, 3}, usr.Ints)
+		require.Equal(t, []string{"foo", "bar", "baz"}, usr.Strings)
+
+		// Set a 'null' (or an undefined) value.
+		usr.Update().ClearStrings().SetInts(nil).SetDirs(nil).ExecX(ctx)
+		usr = client.User.GetX(ctx, usr.ID)
+		require.Empty(t, usr.Ints)
+		require.Empty(t, usr.Strings)
+		usr = usr.Update().AppendStrings([]string{"foo"}).AppendInts([]int{1}).SaveX(ctx)
+		require.Equal(t, []int{1}, usr.Ints)
+		require.Equal(t, []string{"foo"}, usr.Strings)
+
+		usr.Update().AppendStrings([]string{"bar"}).SetStrings([]string{"baz"}).ExecX(ctx)
+		require.Equal(t, []string{"baz"}, client.User.GetX(ctx, usr.ID).Strings)
+		usr.Update().AppendStrings([]string{"bar"}).SetStrings([]string{"baz"}).ExecX(ctx)
+		require.Equal(t, []string{"baz"}, client.User.GetX(ctx, usr.ID).Strings)
+		usr.Update().AppendStrings([]string{"bar"}).ClearStrings().AppendDirs([]http.Dir{"/etc", "/dev"}).ExecX(ctx)
+		usr = client.User.GetX(ctx, usr.ID)
+		require.Empty(t, usr.Strings)
+		require.Equal(t, []http.Dir{"/etc", "/dev"}, usr.Dirs)
+	})
 }
 
 func RawMessage(t *testing.T, client *ent.Client) {
@@ -229,6 +305,24 @@ func URL(t *testing.T, client *ent.Client) {
 	usr = client.User.Create().SetURL(u).SaveX(ctx)
 	require.Equal(t, u, usr.URL)
 	require.Equal(t, u, client.User.GetX(ctx, usr.ID).URL)
+}
+
+func URLs(t *testing.T, client *ent.Client) {
+	ctx := context.Background()
+	u1, err := url.Parse("https://github.com/a8m")
+	require.NoError(t, err)
+	u2, err := url.Parse("https://github.com/ent")
+	require.NoError(t, err)
+	usr := client.User.Create().SetURLs([]*url.URL{u1}).SaveX(ctx)
+	require.NoError(t, err)
+	require.Len(t, usr.URLs, 1)
+	require.Equal(t, u1, usr.URLs[0])
+	usr = client.User.GetX(ctx, usr.ID)
+	require.Equal(t, u1, usr.URLs[0])
+	usr = usr.Update().AppendURLs([]*url.URL{u2}).SaveX(ctx)
+	require.Len(t, usr.URLs, 2)
+	require.Equal(t, u1, usr.URLs[0])
+	require.Equal(t, u2, usr.URLs[1])
 }
 
 func Predicates(t *testing.T, client *ent.Client) {
@@ -505,4 +599,25 @@ func Predicates(t *testing.T, client *ent.Client) {
 		}).CountX(ctx)
 		require.Equal(t, 4, n)
 	})
+}
+
+func Scan(t *testing.T, client *ent.Client) {
+	ctx := context.Background()
+	all := client.User.Query().Order(ent.Asc(user.FieldID)).AllX(ctx)
+	require.NotEmpty(t, all)
+	var scanned []*ent.User
+	// Select all non-sensitive fields.
+	client.User.Query().Order(ent.Asc(user.FieldID)).Select(user.Columns[:len(user.Columns)-2]...).ScanX(ctx, &scanned)
+	require.Equal(t, len(all), len(scanned))
+	for i := range all {
+		require.Equal(t, all[i].ID, scanned[i].ID)
+		require.Equal(t, all[i].T, scanned[i].T)
+		require.Equal(t, all[i].URL, scanned[i].URL)
+		require.Equal(t, all[i].URLs, scanned[i].URLs)
+		require.Equal(t, all[i].Dirs, scanned[i].Dirs)
+		require.Equal(t, all[i].Raw, scanned[i].Raw)
+		require.Equal(t, all[i].Ints, scanned[i].Ints)
+		require.Equal(t, all[i].Floats, scanned[i].Floats)
+		require.Equal(t, all[i].Strings, scanned[i].Strings)
+	}
 }

@@ -708,12 +708,20 @@ func (t *Type) setupFKs() error {
 				}
 			}
 		}
-		// Special case for checking if the FK is already defined as the ID field (see issue 1288).
+		// Special case for checking if the FK is already defined as the ID field (Issue 1288).
 		if key, _ := e.StorageKey(); key != nil && len(key.Columns) == 1 && key.Columns[0] == refid.StorageKey() {
 			fk.Field = refid
 			fk.UserDefined = true
 		}
 		owner.addFK(fk)
+		// In case the user wants to set the column name using the StorageKey option, make sure they
+		// do it using the edge-field option if both back-ref edge and field are defined (Issue 1288).
+		if e.def.StorageKey != nil && len(e.def.StorageKey.Columns) > 0 && !e.OwnFK() && e.Ref != nil && e.Type.fields[e.Rel.Column()] != nil {
+			return fmt.Errorf(
+				"column %q definition on edge %[2]q should be replaced with Field(%[1]q) on its reference %[3]q",
+				e.Rel.Column(), e.Name, e.Ref.Name,
+			)
+		}
 	}
 	return nil
 }
@@ -1095,6 +1103,48 @@ func (f Field) MutationCleared() string {
 	return f.StructField() + "Cleared"
 }
 
+// MutationAdd returns the method name for adding a value to the field.
+// The default name is "Add<FieldName>". If the method conflicts with
+// the mutation methods, suffix the method with "Field".
+func (f Field) MutationAdd() string {
+	name := "Add" + f.StructField()
+	if mutMethods[name] {
+		name += "Field"
+	}
+	return name
+}
+
+// MutationAdded returns the method name for getting the field value
+// that was added to the field.
+func (f Field) MutationAdded() string {
+	name := "Added" + f.StructField()
+	if mutMethods[name] {
+		name += "Field"
+	}
+	return name
+}
+
+// MutationAppend returns the method name for appending a list of values to the field.
+// The default name is "Append<FieldName>". If the method conflicts with the mutation methods,
+// suffix the method with "Field".
+func (f Field) MutationAppend() string {
+	name := "Append" + f.StructField()
+	if mutMethods[name] {
+		name += "Field"
+	}
+	return name
+}
+
+// MutationAppended returns the method name for getting the field value
+// that was added to the field.
+func (f Field) MutationAppended() string {
+	name := "Appended" + f.StructField()
+	if mutMethods[name] {
+		name += "Field"
+	}
+	return name
+}
+
 // IsBool returns true if the field is a bool field.
 func (f Field) IsBool() bool { return f.Type != nil && f.Type.Type == field.TypeBool }
 
@@ -1430,6 +1480,11 @@ func (f Field) implementsAdder() bool {
 
 func rtypeEqual(t1, t2 *field.RType) bool {
 	return t1.Kind == t2.Kind && t1.Ident == t2.Ident && t1.PkgPath == t2.PkgPath
+}
+
+// SupportsMutationAppend reports if the field supports the mutation append operation.
+func (f Field) SupportsMutationAppend() bool {
+	return f.IsJSON() && f.Type.RType != nil && f.Type.RType.Kind == reflect.Slice
 }
 
 var (

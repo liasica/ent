@@ -303,6 +303,16 @@ func TestBuilder(t *testing.T) {
 			wantArgs:  []any{"foo"},
 		},
 		{
+			input:     Dialect(dialect.Postgres).Update("users").Set("name", "foo").Returning("*"),
+			wantQuery: `UPDATE "users" SET "name" = $1 RETURNING *`,
+			wantArgs:  []any{"foo"},
+		},
+		{
+			input:     Dialect(dialect.Postgres).Update("users").Set("name", "foo").Returning("id", "name"),
+			wantQuery: `UPDATE "users" SET "name" = $1 RETURNING "id", "name"`,
+			wantArgs:  []any{"foo"},
+		},
+		{
 			input:     Dialect(dialect.Postgres).Update("users").Set("name", "foo").Schema("mydb"),
 			wantQuery: `UPDATE "mydb"."users" SET "name" = $1`,
 			wantArgs:  []any{"foo"},
@@ -316,6 +326,11 @@ func TestBuilder(t *testing.T) {
 			input:     Update("users").Set("name", "foo").Set("age", 10),
 			wantQuery: "UPDATE `users` SET `name` = ?, `age` = ?",
 			wantArgs:  []any{"foo", 10},
+		},
+		{
+			input:     Dialect(dialect.SQLite).Update("users").Set("name", "foo").Returning("id", "name").OrderBy("name").Limit(10),
+			wantQuery: "UPDATE `users` SET `name` = ? RETURNING `id`, `name` ORDER BY `name` LIMIT 10",
+			wantArgs:  []any{"foo"},
 		},
 		{
 			input:     Dialect(dialect.Postgres).Update("users").Set("name", "foo").Set("age", 10),
@@ -1649,6 +1664,21 @@ func TestSelector_OrderByExpr(t *testing.T) {
 		Query()
 	require.Equal(t, "SELECT * FROM `users` WHERE `age` > ? ORDER BY `name`, CASE WHEN id=? THEN id WHEN id=? THEN name END DESC", query)
 	require.Equal(t, []any{28, 1, 2}, args)
+
+	query, args = Dialect(dialect.Postgres).
+		Select("*").
+		From(Table("users")).
+		Where(GT("age", 28)).
+		OrderBy("name").
+		OrderExpr(ExprFunc(func(b *Builder) {
+			b.WriteString("CASE")
+			b.WriteString(" WHEN ").Ident("id").WriteOp(OpEQ).Arg(1).WriteString(" THEN ").Ident("id")
+			b.WriteString(" WHEN ").Ident("id").WriteOp(OpEQ).Arg(2).WriteString(" THEN ").Ident("name")
+			b.WriteString(" END DESC")
+		})).
+		Query()
+	require.Equal(t, `SELECT * FROM "users" WHERE "age" > $1 ORDER BY "name", CASE WHEN "id" = $2 THEN "id" WHEN "id" = $3 THEN "name" END DESC`, query)
+	require.Equal(t, []any{28, 1, 2}, args)
 }
 
 func TestSelector_SelectExpr(t *testing.T) {
@@ -1670,7 +1700,7 @@ func TestSelector_SelectExpr(t *testing.T) {
 		AppendSelectExpr(
 			Expr("age + $1", 1),
 			ExprFunc(func(b *Builder) {
-				b.Nested(func(b *Builder) {
+				b.Wrap(func(b *Builder) {
 					b.WriteString("similarity(").Ident("name").Comma().Arg("A").WriteByte(')')
 					b.WriteOp(OpAdd)
 					b.WriteString("similarity(").Ident("desc").Comma().Arg("D").WriteByte(')')
@@ -2144,6 +2174,21 @@ func TestWindowFunction(t *testing.T) {
 	query, args := Select("*").From(Table("selected_posts")).Where(LTE("row_number", 2)).Prefix(with).Query()
 	require.Equal(t, "WITH `active_posts` AS (SELECT `posts`.`id`, `posts`.`content`, `posts`.`author_id` FROM `posts` WHERE `active`), `selected_posts` AS (SELECT *, (ROW_NUMBER() OVER (PARTITION BY `author_id` ORDER BY `id`, f(`s`))) AS `row_number` FROM `active_posts`) SELECT * FROM `selected_posts` WHERE `row_number` <= ?", query)
 	require.Equal(t, []any{2}, args)
+}
+
+func TestWindowFunction_Select(t *testing.T) {
+	posts := Table("posts")
+	q := Select().
+		AppendSelect("*").
+		AppendSelectExprAs(
+			Window(func(b *Builder) {
+				b.WriteString(Sum(posts.C("duration")))
+			}).PartitionBy("author_id").OrderBy("id"), "duration").
+		From(posts)
+
+	query, args := q.Query()
+	require.Equal(t, "SELECT *, (SUM(`posts`.`duration`) OVER (PARTITION BY `author_id` ORDER BY `id`)) AS `duration` FROM `posts`", query)
+	require.Nil(t, args)
 }
 
 func TestSelector_UnqualifiedColumns(t *testing.T) {

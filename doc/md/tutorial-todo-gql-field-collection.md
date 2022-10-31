@@ -4,7 +4,7 @@ title: GraphQL Field Collection
 sidebar_label: Field Collection
 ---
 
-In this section, we continue our [GraphQL example](tutorial-todo-gql.md) by explaining how Ent implements
+In this section, we continue our [GraphQL example](tutorial-todo-gql.mdx) by explaining how Ent implements
 [GraphQL Field Collection](https://spec.graphql.org/June2018/#sec-Field-Collection) for our GraphQL schema and solves the
 "N+1 Problem" in our resolvers.
 
@@ -73,7 +73,7 @@ and for the node(s) API.
 For the purpose of the example, we **disable the automatic field collection**, change the `ent.Client` to run in
 debug mode in the `Todos` resolver, and restart our GraphQL server:
 
-```diff title="todo.resolvers.go"
+```diff title="ent.resolvers.go"
 func (r *queryResolver) Todos(ctx context.Context, after *ent.Cursor, first *int, before *ent.Cursor, last *int, orderBy *ent.TodoOrder) (*ent.TodoConnection, error) {
 -	return r.client.Todo.Query().
 +	return r.client.Debug().Todo.Query().
@@ -125,7 +125,11 @@ GraphQL and generates edge-resolvers for the nodes under the `gql_edge.go` file:
 
 ```go title="ent/gql_edge.go"
 func (t *Todo) Children(ctx context.Context) ([]*Todo, error) {
-	result, err := t.Edges.ChildrenOrErr()
+	if fc := graphql.GetFieldContext(ctx); fc != nil && fc.Field.Alias != "" {
+		result, err = t.NamedChildren(graphql.GetFieldContext(ctx).Field.Alias)
+	} else {
+		result, err = t.Edges.ChildrenOrErr()
+	}
 	if IsNotLoaded(err) {
 		result, err = t.QueryChildren().All(ctx)
 	}

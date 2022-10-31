@@ -4,7 +4,7 @@ title: Relay Cursor Connections (Pagination)
 sidebar_label: Relay Cursor Connections
 ---
 
-In this section, we continue the [GraphQL example](tutorial-todo-gql.md) by explaining how to implement the 
+In this section, we continue the [GraphQL example](tutorial-todo-gql.mdx) by explaining how to implement the
 [Relay Cursor Connections Spec](https://relay.dev/graphql/connections.htm). If you're not familiar with the
 Cursor Connections interface, read the following paragraphs that were taken from [relay.dev](https://relay.dev/graphql/connections.htm#sel-DABDDDAADFA0E3kM):
 
@@ -158,8 +158,8 @@ Now, we're ready to test our new GraphQL resolvers. Let's start with creating a 
 query multiple times (changing variables is optional):
 
 ```graphql
-mutation CreateTodo($todo: TodoInput!) {
-    createTodo(todo: $todo) {
+mutation CreateTodo($input: CreateTodoInput!) {
+    createTodo(input: $input) {
         id
         text
         createdAt
@@ -170,7 +170,7 @@ mutation CreateTodo($todo: TodoInput!) {
     }
 }
 
-# Query Variables: { "todo": { "text": "Create GraphQL Example", "status": "IN_PROGRESS", "priority": 1 } }
+# Query Variables: { "input": { "text": "Create GraphQL Example", "status": "IN_PROGRESS", "priority": 1 } }
 # Output: { "data": { "createTodo": { "id": "2", "text": "Create GraphQL Example", "createdAt": "2021-03-10T15:02:18+02:00", "priority": 1, "parent": null } } }
 ```
 
